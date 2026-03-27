@@ -9,6 +9,8 @@ alwaysApply: true
 Auto-generated from all feature plans. Last updated: 2026-03-27
 
 ## Active Technologies
+- Python 3.10+ (stdlib only; align with `pdf_count` and workspace rules) + None (standard library only) (002-count-pdf-directories)
+- N/A (read-only directory traversal) (002-count-pdf-directories)
 
 - Python 3.10+ (stdlib only; 3.10+ for consistent `Path`/`stat` usage patterns) + None (standard library only) (001-count-pdfs-in-directory)
 
@@ -28,6 +30,7 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.10+ (stdlib only; 3.10+ for consistent `Path`/`stat` usage patterns): Follow standard conventions
 
 ## Recent Changes
+- 002-count-pdf-directories: Added Python 3.10+ (stdlib only; align with `pdf_count` and workspace rules) + None (standard library only)
 
 - 001-count-pdfs-in-directory: Added Python 3.10+ (stdlib only; 3.10+ for consistent `Path`/`stat` usage patterns) + None (standard library only)
 

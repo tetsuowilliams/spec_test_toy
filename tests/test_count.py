@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from pdf_count.count import count_pdfs, main
+from pdf_count.count import count_directories_with_direct_pdfs, count_pdfs, main
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -93,6 +93,104 @@ class CountPdfsTests(unittest.TestCase):
                 root.chmod(0o700)
 
 
+class CountDirectoriesWithDirectPdfsTests(unittest.TestCase):
+    """Recursive directory aggregation — spec 002 / plan research."""
+
+    def test_one_subfolder_with_pdf_other_without(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sub_a = root / "a"
+            sub_b = root / "b"
+            sub_a.mkdir()
+            sub_b.mkdir()
+            _touch(sub_a, "doc.pdf")
+            _touch(sub_b, "notes.txt")
+            self.assertEqual(count_directories_with_direct_pdfs(root), 1)
+
+    def test_root_with_direct_pdf_counts_root_once(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, "report.pdf")
+            (root / "empty").mkdir()
+            self.assertEqual(count_directories_with_direct_pdfs(root), 1)
+
+    def test_nested_chain_only_deepest_dir_qualifies(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            deep = root / "sub" / "deep"
+            deep.mkdir(parents=True)
+            _touch(deep, "file.pdf")
+            self.assertEqual(count_directories_with_direct_pdfs(root), 1)
+
+    def test_no_pdfs_anywhere(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "sub").mkdir()
+            _touch(root / "sub", "readme.txt")
+            self.assertEqual(count_directories_with_direct_pdfs(root), 0)
+
+    def test_two_sibling_folders_each_with_pdf(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            s1 = root / "one"
+            s2 = root / "two"
+            s1.mkdir()
+            s2.mkdir()
+            _touch(s1, "a.pdf")
+            _touch(s2, "b.PDF")
+            self.assertEqual(count_directories_with_direct_pdfs(root), 2)
+
+    def test_multiple_pdfs_same_folder_counts_once(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inner = root / "inner"
+            inner.mkdir()
+            _touch(inner, "1.pdf")
+            _touch(inner, "2.pdf")
+            _touch(inner, "3.Pdf")
+            self.assertEqual(count_directories_with_direct_pdfs(root), 1)
+
+    def test_directory_named_pdf_does_not_qualify_parent(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "archive.pdf").mkdir()
+            _touch(root, "real.pdf")
+            self.assertEqual(count_directories_with_direct_pdfs(root), 1)
+
+    def test_hidden_pdf_filename_qualifies_directory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, ".report.pdf")
+            self.assertEqual(count_directories_with_direct_pdfs(root), 1)
+
+    def test_path_does_not_exist(self) -> None:
+        with TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "gone"
+            with self.assertRaises(FileNotFoundError):
+                count_directories_with_direct_pdfs(missing)
+
+    def test_path_is_file_not_directory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            f = Path(tmp) / "x.pdf"
+            f.write_text("", encoding="utf-8")
+            with self.assertRaises(NotADirectoryError):
+                count_directories_with_direct_pdfs(f)
+
+    @unittest.skipUnless(os.name == "posix", "chmod readability is POSIX-oriented")
+    def test_permission_denied_on_walk(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inner = root / "inner"
+            inner.mkdir()
+            _touch(inner, "a.pdf")
+            try:
+                inner.chmod(0)
+                with self.assertRaises(PermissionError):
+                    count_directories_with_direct_pdfs(root)
+            finally:
+                inner.chmod(0o700)
+
+
 class CliTests(unittest.TestCase):
     """Subprocess CLI tests per contracts/cli.md."""
 
@@ -135,11 +233,56 @@ class CliTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn("error", p.stderr.lower())
 
+    def test_cli_count_pdf_directories_success(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            deep = root / "sub" / "deep"
+            deep.mkdir(parents=True)
+            _touch(deep, "file.pdf")
+            p = self._run(["--count-pdf-directories", str(root)])
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, "1\n")
+            self.assertEqual(p.stderr, "")
+
+    def test_cli_count_pdf_directories_two_qualifiers(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = root / "a"
+            b = root / "b"
+            a.mkdir()
+            b.mkdir()
+            _touch(a, "x.pdf")
+            _touch(b, "y.pdf")
+            p = self._run(["--count-pdf-directories", str(root)])
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, "2\n")
+
+    def test_cli_count_pdf_directories_nonexistent(self) -> None:
+        with TemporaryDirectory() as tmp:
+            p = self._run(["--count-pdf-directories", str(Path(tmp) / "nope")])
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("Error", p.stderr)
+
+    def test_cli_without_flag_still_file_count_mode(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inner = root / "inner"
+            inner.mkdir()
+            _touch(inner, "only.pdf")
+            p = self._run([str(root)])
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, "0\n")
+
     def test_main_function_returns_code(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             _touch(root, "a.pdf")
             self.assertEqual(main([str(root)]), 0)
+        with TemporaryDirectory() as tmp:
+            deep = Path(tmp) / "d"
+            deep.mkdir()
+            _touch(deep, "f.pdf")
+            self.assertEqual(main(["--count-pdf-directories", str(Path(tmp))]), 0)
         with TemporaryDirectory() as tmp:
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(main([str(Path(tmp) / "none")]), 1)
