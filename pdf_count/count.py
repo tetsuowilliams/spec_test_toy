@@ -65,6 +65,31 @@ def _reraise_walk_error(exc: OSError) -> None:
     raise exc
 
 
+def list_file_sizes(path: Path) -> list[tuple[str, int]]:
+    """List immediate-child regular files with byte sizes, sorted by name.
+
+    Uses ``lstat`` per entry so symbolic links are not listed as regular files even if their
+    targets are.
+
+    Raises:
+        FileNotFoundError: Path does not exist.
+        NotADirectoryError: Path exists but is not a directory.
+        PermissionError, OSError: Cannot list or stat directory entries.
+    """
+    if not path.exists():
+        raise FileNotFoundError(path)
+    if not path.is_dir():
+        raise NotADirectoryError(path)
+
+    rows: list[tuple[str, int]] = []
+    for entry in path.iterdir():
+        st = entry.lstat()
+        if stat.S_ISREG(st.st_mode):
+            rows.append((entry.name, st.st_size))
+    rows.sort(key=lambda row: row[0])
+    return rows
+
+
 def count_directories_with_direct_pdfs(root: Path) -> int:
     """Count directories under ``root`` that directly contain at least one in-scope PDF file.
 
@@ -106,10 +131,16 @@ def main(argv: list[str] | None = None) -> int:
         prog="pdf_count",
         description="Count .pdf and .doc files in a directory.",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--count-pdf-directories",
         action="store_true",
         help="Recursively count directories that directly contain at least one .pdf file.",
+    )
+    mode.add_argument(
+        "--list-file-sizes",
+        action="store_true",
+        help="List immediate-child regular files with byte sizes (name<TAB>size per line).",
     )
     parser.add_argument(
         "directory",
@@ -120,6 +151,11 @@ def main(argv: list[str] | None = None) -> int:
 
     target = args.directory
     try:
+        if args.list_file_sizes:
+            rows = list_file_sizes(target)
+            for name, size in rows:
+                print(f"{name}\t{size}")
+            return 0
         if args.count_pdf_directories:
             n = count_directories_with_direct_pdfs(target)
         else:

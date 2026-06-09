@@ -9,7 +9,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from pdf_count.count import count_directories_with_direct_pdfs, count_pdfs, main
+from pdf_count.count import (
+    count_directories_with_direct_pdfs,
+    count_pdfs,
+    list_file_sizes,
+    main,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,6 +22,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def _touch(d: Path, name: str) -> Path:
     p = d / name
     p.write_text("", encoding="utf-8")
+    return p
+
+
+def _write_bytes(d: Path, name: str, content: bytes) -> Path:
+    p = d / name
+    p.write_bytes(content)
     return p
 
 
@@ -128,6 +139,103 @@ class CountPdfsTests(unittest.TestCase):
                 root.chmod(0)
                 with self.assertRaises(PermissionError):
                     count_pdfs(root)
+            finally:
+                root.chmod(0o700)
+
+
+class ListFileSizesTests(unittest.TestCase):
+    """Unit tests for list_file_sizes — spec 003 acceptance 1–9."""
+
+    def test_lists_regular_files_sorted_with_byte_sizes(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_bytes(root, "beta.txt", b"x" * 10)
+            _write_bytes(root, "alpha.txt", b"x" * 5)
+            _touch(root, "note.txt")
+            self.assertEqual(
+                list_file_sizes(root),
+                [("alpha.txt", 5), ("beta.txt", 10), ("note.txt", 0)],
+            )
+
+    def test_empty_directory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            self.assertEqual(list_file_sizes(Path(tmp)), [])
+
+    def test_subfolder_files_not_listed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_bytes(root, "top.txt", b"ab")
+            inner = root / "inner"
+            inner.mkdir()
+            _write_bytes(inner, "nested.txt", b"xyz")
+            self.assertEqual(list_file_sizes(root), [("top.txt", 2)])
+
+    def test_path_does_not_exist(self) -> None:
+        with TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "nope"
+            with self.assertRaises(FileNotFoundError):
+                list_file_sizes(missing)
+
+    def test_path_is_file_not_directory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            f = Path(tmp) / "file.txt"
+            f.write_text("x", encoding="utf-8")
+            with self.assertRaises(NotADirectoryError):
+                list_file_sizes(f)
+
+    def test_subdirectory_not_listed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "subdir").mkdir()
+            _write_bytes(root, "real.txt", b"a")
+            self.assertEqual(list_file_sizes(root), [("real.txt", 1)])
+
+    @unittest.skipUnless(os.name == "posix", "symlink semantics are POSIX-oriented")
+    def test_symlink_not_listed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = _write_bytes(root, "target.txt", b"data")
+            (root / "link.txt").symlink_to(target)
+            self.assertEqual(list_file_sizes(root), [("target.txt", 4)])
+
+    def test_hidden_file_listed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_bytes(root, ".hidden", b"12")
+            self.assertEqual(list_file_sizes(root), [(".hidden", 2)])
+
+    def test_zero_byte_file_listed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, "empty.dat")
+            self.assertEqual(list_file_sizes(root), [("empty.dat", 0)])
+
+    def test_same_size_files_both_listed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_bytes(root, "a.txt", b"xx")
+            _write_bytes(root, "b.txt", b"yy")
+            self.assertEqual(
+                list_file_sizes(root),
+                [("a.txt", 2), ("b.txt", 2)],
+            )
+
+    def test_unicode_and_spaces_path(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "földer tür"
+            root.mkdir()
+            _write_bytes(root, "doc.txt", b"abc")
+            self.assertEqual(list_file_sizes(root), [("doc.txt", 3)])
+
+    @unittest.skipUnless(os.name == "posix", "chmod readability is POSIX-oriented")
+    def test_permission_denied_directory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "locked"
+            root.mkdir()
+            try:
+                root.chmod(0)
+                with self.assertRaises(PermissionError):
+                    list_file_sizes(root)
             finally:
                 root.chmod(0o700)
 
@@ -323,6 +431,57 @@ class CliTests(unittest.TestCase):
             self.assertEqual(p.returncode, 0)
             self.assertEqual(p.stdout, "0\n")
 
+    def test_cli_list_file_sizes_success(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_bytes(root, "beta.txt", b"x" * 3)
+            _write_bytes(root, "alpha.txt", b"x" * 7)
+            p = self._run(["--list-file-sizes", str(root)])
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, "alpha.txt\t7\nbeta.txt\t3\n")
+            self.assertEqual(p.stderr, "")
+
+    def test_cli_list_file_sizes_empty_directory(self) -> None:
+        with TemporaryDirectory() as tmp:
+            p = self._run(["--list-file-sizes", str(Path(tmp))])
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, "")
+            self.assertEqual(p.stderr, "")
+
+    def test_cli_list_file_sizes_nonexistent(self) -> None:
+        with TemporaryDirectory() as tmp:
+            p = self._run(["--list-file-sizes", str(Path(tmp) / "missing")])
+            self.assertEqual(p.returncode, 1)
+            self.assertEqual(p.stdout, "")
+            self.assertIn("Error", p.stderr)
+
+    def test_cli_list_file_sizes_conflicting_flags(self) -> None:
+        with TemporaryDirectory() as tmp:
+            p = self._run(
+                ["--list-file-sizes", "--count-pdf-directories", str(Path(tmp))]
+            )
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("error", p.stderr.lower())
+
+    def test_cli_list_file_sizes_does_not_change_default_mode(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, "a.pdf")
+            _touch(root, "b.doc")
+            p = self._run([str(root)])
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, "2\n")
+
+    def test_cli_list_file_sizes_does_not_change_directory_count_mode(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sub = root / "sub"
+            sub.mkdir()
+            _touch(sub, "a.pdf")
+            p = self._run(["--count-pdf-directories", str(root)])
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, "1\n")
+
     def test_main_function_returns_code(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -333,6 +492,12 @@ class CliTests(unittest.TestCase):
             deep.mkdir()
             _touch(deep, "f.pdf")
             self.assertEqual(main(["--count-pdf-directories", str(Path(tmp))]), 0)
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_bytes(root, "z.txt", b"ab")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(main(["--list-file-sizes", str(root)]), 0)
+            self.assertEqual(out.getvalue(), "z.txt\t2\n")
         with TemporaryDirectory() as tmp:
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(main([str(Path(tmp) / "none")]), 1)
