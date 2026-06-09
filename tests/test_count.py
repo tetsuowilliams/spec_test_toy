@@ -32,6 +32,16 @@ class CountPdfsTests(unittest.TestCase):
             _touch(root, "note.txt")
             self.assertEqual(count_pdfs(root), 3)
 
+    def test_mixed_pdf_and_doc_files(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, "a.pdf")
+            _touch(root, "b.doc")
+            _touch(root, "c.DOC")
+            _touch(root, "d.Doc")
+            _touch(root, "note.txt")
+            self.assertEqual(count_pdfs(root), 4)
+
     def test_empty_directory(self) -> None:
         with TemporaryDirectory() as tmp:
             self.assertEqual(count_pdfs(Path(tmp)), 0)
@@ -45,6 +55,15 @@ class CountPdfsTests(unittest.TestCase):
             inner.mkdir()
             _touch(inner, "c.pdf")
             self.assertEqual(count_pdfs(root), 2)
+
+    def test_subfolder_doc_not_counted(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, "a.doc")
+            inner = root / "inner"
+            inner.mkdir()
+            _touch(inner, "b.doc")
+            self.assertEqual(count_pdfs(root), 1)
 
     def test_path_does_not_exist(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -67,10 +86,30 @@ class CountPdfsTests(unittest.TestCase):
             _touch(root, "real.pdf")
             self.assertEqual(count_pdfs(root), 1)
 
+    def test_directory_named_like_doc_not_counted(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "archive.doc").mkdir()
+            _touch(root, "real.doc")
+            self.assertEqual(count_pdfs(root), 1)
+
     def test_hidden_style_pdf_name_counted(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             _touch(root, ".report.pdf")
+            self.assertEqual(count_pdfs(root), 1)
+
+    def test_hidden_style_doc_name_counted(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, ".report.doc")
+            self.assertEqual(count_pdfs(root), 1)
+
+    def test_docx_not_counted(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, "letter.docx")
+            _touch(root, "letter.doc")
             self.assertEqual(count_pdfs(root), 1)
 
     def test_unicode_and_spaces_path(self) -> None:
@@ -208,6 +247,17 @@ class CliTests(unittest.TestCase):
             root = Path(tmp)
             _touch(root, "x.pdf")
             _touch(root, "y.PDF")
+            p = self._run([str(root)])
+            self.assertEqual(p.returncode, 0)
+            self.assertEqual(p.stdout, "2\n")
+            self.assertEqual(p.stderr, "")
+
+    def test_cli_counts_pdf_and_doc(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _touch(root, "x.pdf")
+            _touch(root, "y.doc")
+            _touch(root, "z.txt")
             p = self._run([str(root)])
             self.assertEqual(p.returncode, 0)
             self.assertEqual(p.stdout, "2\n")

@@ -9,6 +9,15 @@ import sys
 from pathlib import Path
 
 
+_IN_SCOPE_SUFFIXES = (".pdf", ".doc")
+
+
+def _is_in_scope_document_file(name: str, st_mode: int) -> bool:
+    """True if ``name`` / ``st_mode`` describe an in-scope document regular file (lstat semantics)."""
+    lower = name.lower()
+    return stat.S_ISREG(st_mode) and any(lower.endswith(suffix) for suffix in _IN_SCOPE_SUFFIXES)
+
+
 def _is_in_scope_pdf_file(name: str, st_mode: int) -> bool:
     """True if ``name`` / ``st_mode`` describe an in-scope PDF regular file (lstat semantics)."""
     return stat.S_ISREG(st_mode) and name.lower().endswith(".pdf")
@@ -28,7 +37,7 @@ def directory_has_direct_pdf(path: Path) -> bool:
 
 
 def count_pdfs(path: Path) -> int:
-    """Count immediate-child regular files whose names end with ``.pdf`` (case-insensitive).
+    """Count immediate-child regular files whose names end with ``.pdf`` or ``.doc`` (case-insensitive).
 
     Uses ``lstat`` per entry so symbolic links are not counted as regular files even if their
     targets are.
@@ -46,7 +55,7 @@ def count_pdfs(path: Path) -> int:
     n = 0
     for entry in path.iterdir():
         st = entry.lstat()
-        if _is_in_scope_pdf_file(entry.name, st.st_mode):
+        if _is_in_scope_document_file(entry.name, st.st_mode):
             n += 1
     return n
 
@@ -93,7 +102,10 @@ class _ArgumentParser(argparse.ArgumentParser):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = _ArgumentParser(prog="pdf_count", description="Count .pdf files in a directory.")
+    parser = _ArgumentParser(
+        prog="pdf_count",
+        description="Count .pdf and .doc files in a directory.",
+    )
     parser.add_argument(
         "--count-pdf-directories",
         action="store_true",
